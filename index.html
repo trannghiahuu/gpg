@@ -411,6 +411,9 @@
   .width-swatch:last-child{border-bottom:0}
   .width-swatch:hover,.width-swatch.is-selected{filter:brightness(.97);box-shadow:inset 0 0 0 2px #5b21b6}
   .sample-line{display:block;width:68%;height:var(--sample-width);min-height:1px;border-radius:999px;background:#101010}
+  .sample-line-dashed{height:0!important;min-height:0!important;border-top:var(--sample-width) dashed #101010;border-radius:0;background:transparent}
+  .width-swatch-dashed{background:#fffbd0!important}
+
   #sidebar-drawing-tools #color-menu{width:132px;padding:4px;background:#c98df2;border:2px solid #171717;border-radius:2px}
   .color-swatch-grid{display:grid;grid-template-columns:1fr 1fr;gap:0;border:2px solid #171717}
   .color-swatch{width:100%;height:56px;padding:0;border:0;border-right:2px solid #171717;border-bottom:2px solid #171717;border-radius:0;background:var(--swatch);cursor:pointer}
@@ -3444,6 +3447,9 @@ body > .max-w-\[1300px\] {
                 <button type="button" class="width-swatch" data-widthlevel="1" role="radio" aria-checked="false" title="Nét nhỏ">
                   <span class="sample-line" style="--sample-width:1.5px"></span>
                 </button>
+                <button type="button" class="width-swatch width-swatch-dashed" data-widthlevel="1" data-line-style="dashed" role="radio" aria-checked="false" title="Nét đứt rất nhỏ">
+                  <span class="sample-line sample-line-dashed" style="--sample-width:1.5px"></span>
+                </button>
                 <button type="button" class="width-swatch" data-widthlevel="2" role="radio" aria-checked="true" title="Nét trung bình">
                   <span class="sample-line" style="--sample-width:3px"></span>
                 </button>
@@ -3569,6 +3575,7 @@ body > .max-w-\[1300px\] {
   // Màu và cỡ nét dùng chung cho điểm, đường thẳng, nét tự do, đường tròn compa và chữ/nhãn.
   let penColor = '#007AFF';
   let penWidth = 3;
+  let penLineStyle = 'solid';
   let textSize = 16;
   // Quy ước CSS chuẩn: 96 CSS px = 1 inch = 2.54 cm.
   // Vì vậy 1 cm trên canvas = 96 / 2.54 đơn vị canvas ở mức zoom 100%.
@@ -4025,13 +4032,13 @@ body > .max-w-\[1300px\] {
       ctx.save();
       if (item.type === 'segment') {
         ctx.globalCompositeOperation = 'source-over'; ctx.strokeStyle = item.obj.color || '#2563eb'; ctx.lineWidth   = item.obj.width || 2;
-        ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(item.obj.a.x, item.obj.a.y); ctx.lineTo(item.obj.b.x, item.obj.b.y); ctx.stroke();
+        ctx.lineCap = 'round'; ctx.setLineDash(item.obj.lineStyle === 'dashed' ? [4, 4] : []); ctx.beginPath(); ctx.moveTo(item.obj.a.x, item.obj.a.y); ctx.lineTo(item.obj.b.x, item.obj.b.y); ctx.stroke();
       } else if (item.type === 'freehand') {
         const obj = item.obj; const path = obj.points || obj;
         if(path && path.length >= 2) {
           if (obj.isEraser) { ctx.globalCompositeOperation = 'destination-out'; ctx.lineWidth = obj.width * 2; ctx.strokeStyle = '#000';
           } else { ctx.globalCompositeOperation = 'source-over'; ctx.lineWidth = obj.width || 2; ctx.strokeStyle = obj.color || '#000'; }
-          ctx.lineCap='round'; ctx.lineJoin='round';
+          ctx.lineCap='round'; ctx.lineJoin='round'; ctx.setLineDash(!obj.isEraser && obj.lineStyle === 'dashed' ? [4, 4] : []);
           ctx.beginPath(); path.forEach((pt,i)=> i?ctx.lineTo(pt.x,pt.y):ctx.moveTo(pt.x,pt.y)); ctx.stroke();
         }
       }
@@ -4546,7 +4553,7 @@ body > .max-w-\[1300px\] {
       if (tool === 'eraser') {
         ctx.globalCompositeOperation = 'destination-out'; ctx.lineWidth = ERASER_R * 2; ctx.strokeStyle = '#000';
       } else {
-        ctx.globalCompositeOperation = 'source-over'; ctx.strokeStyle=penColor; ctx.lineWidth=penWidth;
+        ctx.globalCompositeOperation = 'source-over'; ctx.strokeStyle=penColor; ctx.lineWidth=penWidth; ctx.setLineDash(penLineStyle === 'dashed' ? [4, 4] : []);
       }
       ctx.lineCap='round'; ctx.lineJoin='round';
       ctx.beginPath(); drawingPath.forEach((pt,i)=> i?ctx.lineTo(pt.x,pt.y):ctx.moveTo(pt.x,pt.y)); ctx.stroke();
@@ -4555,7 +4562,7 @@ body > .max-w-\[1300px\] {
     ctx.globalCompositeOperation = 'source-over';
     drawPoints(); drawTexts();
     if(drawingLine){
-      ctx.save(); ctx.strokeStyle=penColor; ctx.lineWidth=penWidth; ctx.lineCap='round';
+      ctx.save(); ctx.strokeStyle=penColor; ctx.lineWidth=penWidth; ctx.lineCap='round'; ctx.setLineDash(penLineStyle === 'dashed' ? [4, 4] : []);
       lineBetween(drawingLine.start, drawingLine.end); ctx.restore();
     }
     ctx = mainCtx;
@@ -4775,7 +4782,8 @@ body > .max-w-\[1300px\] {
   }
   function refreshWidthSwatches(level = Number(penWidthInput.value) || 2) {
     penWidthPanel.querySelectorAll('[data-widthlevel]').forEach(btn => {
-      const selected = Number(btn.dataset.widthlevel) === level;
+      const style = btn.dataset.lineStyle || 'solid';
+      const selected = Number(btn.dataset.widthlevel) === level && style === penLineStyle;
       btn.classList.toggle('is-selected', selected);
       btn.setAttribute('aria-checked', String(selected));
     });
@@ -4898,6 +4906,15 @@ body > .max-w-\[1300px\] {
   colorToggle.addEventListener('pointerdown', e => e.stopPropagation());
   penBtn.addEventListener('click', togglePenModeMenu);
   penWidthToggle.addEventListener('click', togglePenWidthMenu);
+  // V163: Đóng menu con ngay khi chạm/bấm bất kỳ vị trí nào bên ngoài menu và nút mở menu.
+  document.addEventListener('pointerdown', e => {
+    const insidePopup = [penMenu, colorMenu, penWidthPanel].some(menu => menu &&
+      (menu === e.target || menu.contains(e.target)));
+    const onTrigger = [penBtn, colorToggle, penWidthToggle].some(button => button &&
+      (button === e.target || button.contains(e.target)));
+    if (!insidePopup && !onTrigger) closeDrawingPopups();
+  }, true);
+
 
   colorToggle.addEventListener('click', e => {
     e.preventDefault(); e.stopPropagation();
@@ -4926,8 +4943,19 @@ body > .max-w-\[1300px\] {
     btn.addEventListener('click', e => {
       e.stopPropagation();
       penWidthInput.value = btn.dataset.widthlevel;
+      penLineStyle = btn.dataset.lineStyle || 'solid';
       penWidthInput.dispatchEvent(new Event('input', {bubbles:true}));
+      // V165: Khi đang chọn một hay nhiều đoạn thẳng đã vẽ, áp dụng kiểu nét mới
+      // cho các đoạn thẳng được chọn; không thay đổi các đối tượng khác.
+      if (selectedObjects && selectedObjects.length) {
+        selectedObjects.forEach(o => {
+          if (o.type === 'segment' && segments[o.index]) {
+            segments[o.index].lineStyle = penLineStyle;
+          }
+        });
+      }
       refreshWidthSwatches(Number(btn.dataset.widthlevel));
+      draw();
       closeDrawingPopups();
     });
   });
@@ -5928,10 +5956,10 @@ body > .max-w-\[1300px\] {
     selectionBox=null; selectionStart=null; draggingSelection=false; selectionDragSnapshot=null;
     if(tool==='pen' && isDrawing){
       if(penMode==='line' && drawingLine){
-        const s = {a: drawingLine.start, b: drawingLine.end, color:penColor, width:penWidth, label: '', labelT:0.5, labelN:-10, zOrder: drawOrder++};
+        const s = {a: drawingLine.start, b: drawingLine.end, color:penColor, width:penWidth, lineStyle:penLineStyle, label: '', labelT:0.5, labelN:-10, zOrder: drawOrder++};
         segments.push(s); drawingLine=null; draw();
       } else if(penMode==='freehand' && drawingPath){
-        freehandPaths.push({points:drawingPath, color:penColor, width:penWidth, zOrder: drawOrder++}); drawingPath=null;
+        freehandPaths.push({points:drawingPath, color:penColor, width:penWidth, lineStyle:penLineStyle, zOrder: drawOrder++}); drawingPath=null;
       }
     } 
     else if (tool==='eraser' && isErasing) {
