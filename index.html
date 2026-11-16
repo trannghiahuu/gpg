@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="description" content="PGP Plane Geometry Practice - tích hợp compa SVG và điều khiển thước đo góc trực tiếp" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>PGP | Plane Geometry Practice | V3.0</title>
+  <title>PGP | Plane Geometry Practice | V3.1</title>
 
   <style>
 /* Tailwind utilities bundled locally for offline use */
@@ -3552,7 +3552,7 @@ body > .max-w-\[1300px\] {
           <ul class="list-disc pl-5 space-y-1">
             <li><strong>✏️ Pen:</strong> Có 3 chế độ vẽ: Chấm điểm, Kẻ đoạn thẳng, Vẽ tự do.</li>
             <li><strong>Aa Text:</strong> Nhấp vào bảng để gõ văn bản, ghi chú.</li>
-            <li><strong>📋 Paste:</strong> Dán ảnh/đề bài vào bảng. Ảnh được giữ kích thước pixel gốc (tương ứng 96 DPI ở mức zoom 100%); ảnh luôn nằm ở lớp dưới cùng.</li>
+            <li><strong>📋 Paste:</strong> Dán ảnh/đề bài vào bảng. Ảnh clipboard được quy đổi theo DPR và zoom hiện tại để không bị phóng lớn; ảnh chụp thước cm giữ đúng tỷ lệ khi dán ở mức zoom 100%; ảnh luôn nằm ở lớp dưới cùng.</li>
             <li><strong>▦ Ô ly cm:</strong> Bật/tắt lưới ô vuông 1 cm; các đường đậm hơn xuất hiện mỗi 5 cm.</li>
             <li><strong>🧽 Eraser:</strong> Cục tẩy dùng để xóa đối tượng đã vẽ.</li>
           </ul>
@@ -4865,6 +4865,37 @@ body > .max-w-\[1300px\] {
     });
   }
 
+  // PGP V190: Ảnh lấy từ clipboard thường có kích thước theo pixel màn hình
+  // (physical pixels), trong khi tọa độ canvas dùng CSS/logical pixels.
+  // Quy đổi theo DPR × boardZoom để tránh ảnh bị phóng lớn thêm lần nữa.
+  // Nhờ vậy ảnh chụp cây thước đang hiển thị ở mức zoom 100% giữ đúng tỷ lệ cm
+  // khi đưa vào bảng vẽ, thay vì nhân thêm hệ số màn hình HiDPI.
+  function getPastedImageCanvasSize(img) {
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const zoom = Math.max(0.01, Number(boardZoom) || 1);
+    const pixelToCanvas = dpr * zoom;
+    const sourceWidth = img.naturalWidth || img.width || 1;
+    const sourceHeight = img.naturalHeight || img.height || 1;
+    return {
+      w: sourceWidth / pixelToCanvas,
+      h: sourceHeight / pixelToCanvas
+    };
+  }
+
+  function addClipboardImage(blob, x, y) {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const size = getPastedImageCanvasSize(img);
+      images.push({ img, x, y, w: size.w, h: size.h });
+      URL.revokeObjectURL(url);
+      draw();
+    };
+    img.onerror = () => URL.revokeObjectURL(url);
+    img.src = url;
+  }
+
   async function pasteFromClipboard(x, y) {
     try {
       const clipboardItems = await navigator.clipboard.read();
@@ -4872,9 +4903,8 @@ body > .max-w-\[1300px\] {
         if (clipboardItem.types.some(type => type.startsWith('image/'))) {
           const imageType = clipboardItem.types.find(t => t.startsWith('image/'));
           const blob = await clipboardItem.getType(imageType);
-          const url = URL.createObjectURL(blob); const img = new Image();
-          img.onload = () => { images.push({ img, x, y, w: img.width, h: img.height }); draw(); };
-          img.src = url; return;
+          addClipboardImage(blob, x, y);
+          return;
         }
         else if (clipboardItem.types.includes('text/plain')) {
           const blob = await clipboardItem.getType('text/plain'); const text = await blob.text();
@@ -4886,12 +4916,13 @@ body > .max-w-\[1300px\] {
 
   window.addEventListener('paste', e => {
     const p = lastPointer || {x: canvas.offsetWidth/(2*boardZoom), y: canvas.offsetHeight/(2*boardZoom)};
-    const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+    const clipboard = e.clipboardData || (e.originalEvent && e.originalEvent.clipboardData);
+    if (!clipboard || !clipboard.items) return;
+    const items = clipboard.items;
     for (const item of items) {
       if (item.type.indexOf('image') === 0) {
-        const blob = item.getAsFile(); const img = new Image();
-        img.onload = () => { images.push({ img, x: p.x, y: p.y, w: img.width, h: img.height }); draw(); };
-        img.src = URL.createObjectURL(blob); e.preventDefault(); return;
+        addClipboardImage(item.getAsFile(), p.x, p.y);
+        e.preventDefault(); return;
       } else if (item.type === 'text/plain') {
         item.getAsString(text => { if(text) { texts.push({ text, x: p.x, y: p.y, color: penColor, size: textSize, zOrder: drawOrder++ }); draw(); } });
         e.preventDefault(); return;
