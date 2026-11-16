@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="description" content="PGP Plane Geometry Practice - tích hợp compa SVG và điều khiển thước đo góc trực tiếp" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>PGP | Plane Geometry Practice | V73 – Fresh Mathematics Edition</title>
+  <title>PGP | Plane Geometry Practice | V3.0</title>
 
   <style>
 /* Tailwind utilities bundled locally for offline use */
@@ -3805,6 +3805,117 @@ body > .max-w-\[1300px\] {
   const pointNames = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
   let hoverSnap = false;
+  let activeSnapPoint = null;
+  function findNearestExistingPoint(pos, tolerance = 16) {
+    let nearest = null, best = tolerance;
+    for (const pt of points) {
+      const d = Math.hypot(pos.x - pt.x, pos.y - pt.y);
+      if (d <= best) { best = d; nearest = pt; }
+    }
+    return nearest;
+  }
+
+  // V172: Đầu bút tự bắt vào nét thẳng và đường tròn/đường cong đã vẽ.
+  // Các đường tròn tạo bằng compa được lưu dưới dạng các điểm của freehandPaths,
+  // vì vậy phép chiếu lên từng đoạn nhỏ cũng bắt dính được đường tròn.
+  function projectPenToSegment(pos, a, b) {
+    const dx=b.x-a.x, dy=b.y-a.y, len2=dx*dx+dy*dy;
+    if (len2 < 1e-8) return {x:a.x,y:a.y};
+    const t=Math.max(0,Math.min(1,((pos.x-a.x)*dx+(pos.y-a.y)*dy)/len2));
+    return {x:a.x+t*dx,y:a.y+t*dy};
+  }
+  function snapPenToExistingGeometry(pos, tolerance = 15) {
+    let best=null, bestDistance=tolerance;
+    const consider=(a,b)=>{
+      const q=projectPenToSegment(pos,a,b);
+      const d=Math.hypot(pos.x-q.x,pos.y-q.y);
+      if(d<=bestDistance){bestDistance=d;best=q;}
+    };
+    // Nét thẳng được vẽ bằng công cụ đoạn thẳng.
+    for(const s of segments) if(s && s.a && s.b) consider(s.a,s.b);
+    // Đường tròn compa và các nét cong được lưu thành chuỗi điểm.
+    for(const path of freehandPaths){
+      if(!path || path.isEraser) continue;
+      const pts=path.points || path;
+      if(!Array.isArray(pts) || pts.length<2) continue;
+      for(let i=1;i<pts.length;i++) consider(pts[i-1],pts[i]);
+      // Nếu nét khép kín (đường tròn), xét thêm đoạn nối cuối về đầu.
+      if(pts.length>12 && Math.hypot(pts[0].x-pts[pts.length-1].x,pts[0].y-pts[pts.length-1].y)<24)
+        consider(pts[pts.length-1],pts[0]);
+    }
+    return best;
+  }
+  // V174: Hiệu chỉnh bắt dính đúng đầu bút compa vào điểm có sẵn nằm trên quỹ đạo đường tròn.
+  function snapCompassPencilAngle(obj, pencilAngle, tolerance = 18) {
+    const radius = obj.penRadius || getCompassGeometry(obj).radius;
+    const tip = {x:obj.x + radius*Math.cos(pencilAngle), y:obj.y + radius*Math.sin(pencilAngle)};
+    let nearest = null, best = tolerance;
+    for (const pt of points) {
+      if (Math.abs(Math.hypot(pt.x-obj.x, pt.y-obj.y)-radius) > tolerance) continue;
+      const d = Math.hypot(pt.x-tip.x, pt.y-tip.y);
+      if (d <= best) { best=d; nearest=pt; }
+    }
+    return nearest ? Math.atan2(nearest.y-obj.y, nearest.x-obj.x) : pencilAngle;
+  }
+
+  // V177: Ưu tiên điểm gần ĐẦU BÚT THỰC TẾ nhất.
+  // Kiểm tra khoảng cách tới vị trí đầu bút sau khi đặt góc xoay hiện tại;
+  // chỉ xét những điểm mà compa có thể đạt tới bằng cách thay đổi độ mở.
+  function snapCompassPencilToNearestPoint(obj, tolerance = 36) {
+    // PGP V189: Khi khóa khẩu độ, không cho cơ chế bắt điểm tự thay đổi openAngle.
+    // Vẫn cho phép xoay compa; chỉ vô hiệu hóa việc tự nới/khép chân trong lúc bắt điểm.
+    if (obj.isLocked) return null;
+
+    let geo = getCompassGeometry(obj);
+    let tip = compassSvgToWorld(obj, geo.pencilLocal);
+    let target = null;
+    let bestDistance = tolerance;
+    let targetRadius = 0;
+
+    const scale = obj.size / 200;
+    const maxLegSpan = 260 * scale;
+    const minRadius = maxLegSpan * Math.sin(5 * Math.PI / 180);
+    const maxRadius = maxLegSpan * Math.sin(80 * Math.PI / 180);
+
+    // Chọn điểm hợp lệ có khoảng cách Euclid nhỏ nhất tới đầu bút đang hiển thị.
+    for (const pt of points) {
+      if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
+
+      const distance = Math.hypot(pt.x - tip.x, pt.y - tip.y);
+      if (distance >= bestDistance) continue;
+
+      const radius = Math.hypot(pt.x - obj.x, pt.y - obj.y);
+      if (radius < minRadius || radius > maxRadius) continue;
+
+      target = pt;
+      bestDistance = distance;
+      targetRadius = radius;
+    }
+
+    if (!target) return null;
+
+    // Thay đổi độ mở để khoảng cách từ chân kim đến đầu bút bằng đúng
+    // khoảng cách từ chân kim đến điểm đích.
+    const halfAngle = Math.asin(clamp(targetRadius / maxLegSpan,
+                                      Math.sin(5 * Math.PI / 180),
+                                      Math.sin(80 * Math.PI / 180)));
+    obj.openAngle = clamp(2 * halfAngle * 180 / Math.PI, 10, 160);
+    obj.penRadius = targetRadius;
+
+    // Tính lại hình học sau khi đổi độ mở, rồi xoay thân để đầu bút
+    // trùng chính xác với điểm đã chọn.
+    geo = getCompassGeometry(obj);
+    const localTipVector = {
+      x: geo.pencilLocal.x - geo.pinLocal.x,
+      y: geo.pencilLocal.y - geo.pinLocal.y
+    };
+    const localTipAngle = Math.atan2(localTipVector.y, localTipVector.x);
+    const targetAngle = Math.atan2(target.y - obj.y, target.x - obj.x);
+    obj.angle = targetAngle - localTipAngle;
+
+    return { point: target, distance: bestDistance, radius: targetRadius };
+  }
+
   let drawingLine = null;   
   let drawingPath = null;   
   let lastPointer = null;
@@ -4246,29 +4357,85 @@ body > .max-w-\[1300px\] {
     ctx.fillText('G', 60, lockY + .25);
     ctx.restore();
 
-    // Chân giữ bút: nhựa xanh bóng, vòng khóa đen và thân bút cam.
+    // Chân giữ bút: thu gọn cùng bề rộng 9.5 đơn vị như chân kim compa.
+    // Phần kim loại phía trên dùng cùng dải màu với chân gắn kim.
     ctx.save();
     ctx.translate(60, 20); ctx.rotate(sign * half); ctx.translate(-60, -20);
-    const blue = ctx.createLinearGradient(51, 0, 68, 0);
-    blue.addColorStop(0, '#064A9C'); blue.addColorStop(.22, '#1689E8');
-    blue.addColorStop(.48, '#72D5FF'); blue.addColorStop(.68, '#0874D2'); blue.addColorStop(1, '#063C83');
     const orange = ctx.createLinearGradient(50, 0, 69, 0);
     orange.addColorStop(0, '#B94A08'); orange.addColorStop(.25, '#FF9A16');
     orange.addColorStop(.52, '#FFE08A'); orange.addColorStop(.76, '#F07819'); orange.addColorStop(1, '#9C3D08');
 
-    // Thân xanh phía trên.
-    glossyTube(60, 17, 60, 91, 13, blue);
+    // Phần trên khớp nối gắn bút: cùng chất liệu và màu kim loại với chân kim.
+    glossyTube(60, 17, 60, 91, 9.5, metalGradient);
     // Ống bút cam phía dưới.
     ctx.save(); ctx.shadowColor='rgba(20,35,55,.35)'; ctx.shadowBlur=5; ctx.shadowOffsetY=3;
     ctx.fillStyle=orange; ctx.strokeStyle='#8B430D'; ctx.lineWidth=1.2;
     roundedCompassRect(53.5, 86, 13, 40, 4); ctx.stroke();
     ctx.shadowColor='transparent';
-    const pencilTip = ctx.createLinearGradient(53, 0, 67, 0);
-    pencilTip.addColorStop(0, '#C65B08'); pencilTip.addColorStop(.45, '#FFD35C'); pencilTip.addColorStop(1, '#A63D06');
-    ctx.fillStyle=pencilTip; compassPolygon([[52.5,122],[67.5,122],[64.5,135],[60,150],[55.5,135]]);
-    ctx.fillStyle = compa.drawingEnabled && compa.rotating ? penColor : '#F9FCFF';
-    ctx.strokeStyle='#526170'; ctx.lineWidth=1.15;
-    ctx.beginPath(); ctx.moveTo(56.5,134); ctx.lineTo(63.5,134); ctx.lineTo(60,151); ctx.closePath(); ctx.fill(); ctx.stroke();
+    // Cụm chuốt bút chì: tạo phần gỗ vát nhọn, có hai mặt sáng/tối như bút chì thật.
+    // Điểm tiếp xúc hình học vẫn giữ nguyên tại (60,150), không làm thay đổi thao tác compa.
+    ctx.save();
+    const woodGradient = ctx.createLinearGradient(53.5, 0, 66.5, 0);
+    woodGradient.addColorStop(0, '#A96931');
+    woodGradient.addColorStop(.16, '#D9A363');
+    woodGradient.addColorStop(.38, '#F8DDAA');
+    woodGradient.addColorStop(.56, '#EFCB91');
+    woodGradient.addColorStop(.82, '#C58A4D');
+    woodGradient.addColorStop(1, '#895127');
+    ctx.fillStyle = woodGradient;
+    ctx.strokeStyle = '#80502B';
+    ctx.lineWidth = .75;
+    ctx.beginPath();
+    ctx.moveTo(53.8, 120.5);
+    ctx.lineTo(66.2, 120.5);
+    ctx.lineTo(61.15, 146.4);
+    ctx.quadraticCurveTo(60.55, 149.1, 60, 150);
+    ctx.quadraticCurveTo(59.45, 149.1, 58.85, 146.4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Các vệt mặt chuốt mảnh giúp phần gỗ có khối, không tạo viền thô.
+    ctx.strokeStyle = 'rgba(255,247,220,.72)';
+    ctx.lineWidth = .85;
+    ctx.beginPath(); ctx.moveTo(56.0, 123.0); ctx.lineTo(59.15, 143.6); ctx.stroke();
+    ctx.strokeStyle = 'rgba(111,65,31,.38)';
+    ctx.lineWidth = .7;
+    ctx.beginPath(); ctx.moveTo(64.2, 123.0); ctx.lineTo(60.85, 143.6); ctx.stroke();
+
+    // Lõi bút chì màu: luôn lấy trực tiếp penColor đang chọn trên bảng màu.
+    // Khi đổi màu bảng chọn, draw() được gọi lại nên đầu chì cập nhật tức thì.
+    const pigment = /^#[0-9a-f]{6}$/i.test(penColor) ? penColor : '#007AFF';
+    const shadePigment = (hex, target, amount) => {
+      const parse = value => [1, 3, 5].map(i => parseInt(value.slice(i, i + 2), 16));
+      const a = parse(hex), b = parse(target);
+      return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * amount).toString(16).padStart(2, '0')).join('');
+    };
+    const pigmentGradient = ctx.createLinearGradient(57.7, 0, 62.3, 0);
+    pigmentGradient.addColorStop(0, shadePigment(pigment, '#000000', .28));
+    pigmentGradient.addColorStop(.24, shadePigment(pigment, '#FFFFFF', .18));
+    pigmentGradient.addColorStop(.52, pigment);
+    pigmentGradient.addColorStop(.78, shadePigment(pigment, '#FFFFFF', .10));
+    pigmentGradient.addColorStop(1, shadePigment(pigment, '#000000', .32));
+    ctx.fillStyle = pigmentGradient;
+    ctx.strokeStyle = shadePigment(pigment, '#000000', .38);
+    ctx.lineWidth = .55;
+    ctx.beginPath();
+    ctx.moveTo(58.0, 132.2);
+    ctx.lineTo(62.0, 132.2);
+    ctx.lineTo(60.62, 146.5);
+    ctx.quadraticCurveTo(60.28, 149.15, 60, 150);
+    ctx.quadraticCurveTo(59.72, 149.15, 59.38, 146.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Vệt sáng rất nhỏ trên lõi màu, giữ cảm giác bóng và nhọn ở đầu bút.
+    ctx.strokeStyle = 'rgba(255,255,255,.48)';
+    ctx.lineWidth = .48;
+    ctx.beginPath(); ctx.moveTo(58.75, 134.0); ctx.lineTo(59.72, 146.1); ctx.stroke();
+    ctx.restore();
+
     ctx.restore();
 
     // Vòng kẹp bút 3D.
@@ -4295,7 +4462,9 @@ body > .max-w-\[1300px\] {
     compassPolygon([[55,100],[65,100],[63.5,127],[60,137],[56.5,127]]); ctx.stroke();
     const redTip=ctx.createLinearGradient(56,0,64,0);
     redTip.addColorStop(0,'#9F1721'); redTip.addColorStop(.45,'#FF5B62'); redTip.addColorStop(1,'#A91522');
-    ctx.fillStyle=redTip; compassPolygon([[57.5,123],[62.5,123],[61.8,137],[60,151],[58.2,137]]);
+    // Mũi kim kết thúc đúng tại tâm neo hình học (60,150),
+    // trùng với tâm chấm vàng và điểm đặt chân kim trên bảng vẽ.
+    ctx.fillStyle=redTip; compassPolygon([[57.5,123],[62.5,123],[61.8,137],[60,150],[58.2,137]]);
     ctx.fillStyle='#FFD54F'; ctx.beginPath(); ctx.arc(60,150,2.1,0,Math.PI*2); ctx.fill();
     ctx.restore();
     ctx.restore();
@@ -4560,7 +4729,18 @@ body > .max-w-\[1300px\] {
       ctx.restore();
     }
     ctx.globalCompositeOperation = 'source-over';
-    drawPoints(); drawTexts();
+    drawPoints();
+    if (activeSnapPoint && drawingLine) {
+      ctx.save();
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([3, 2]);
+      ctx.beginPath();
+      ctx.arc(activeSnapPoint.x, activeSnapPoint.y, 9, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    drawTexts();
     if(drawingLine){
       ctx.save(); ctx.strokeStyle=penColor; ctx.lineWidth=penWidth; ctx.lineCap='round'; ctx.setLineDash(penLineStyle === 'dashed' ? [4, 4] : []);
       lineBetween(drawingLine.start, drawingLine.end); ctx.restore();
@@ -4960,10 +5140,28 @@ body > .max-w-\[1300px\] {
     });
   });
 
+  // V166: Chọn dụng cụ hình học sẽ tạm ngưng chế độ bút.
+  // Bút chỉ hoạt động trở lại khi người dùng bấm nút bút và chọn chế độ bút.
+  ['btn-ruler','btn-protractor','btn-eke','btn-compa'].forEach(id => {
+    const instrumentButton = document.getElementById(id);
+    if (!instrumentButton) return;
+    instrumentButton.addEventListener('click', () => {
+      if (tool === 'pen') {
+        tool = 'move';
+        drawingLine = null;
+        drawingPath = null;
+        isDrawing = false;
+        penBtn.classList.remove('ring-4','ring-slate-400','ring-offset-1');
+        setCursor();
+      }
+    }, true);
+  });
+
   document.querySelectorAll('[data-tool]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       closeDrawingPopups();
       tool = btn.dataset.tool; drawingLine = null; drawingPath = null; isDrawing=false; isErasing=false; hoverSnap=false;
+      if (tool !== 'pen') penBtn.classList.remove('ring-4','ring-slate-400','ring-offset-1');
       dragPointIdx = dragSegIdx = -1; dragSegMode=null; lastDragPos=null; dragTextIdx = -1; dragImageIdx = -1; dragPointLabelIdx = dragSegLabelIdx = -1;
       setCursor();
       document.querySelectorAll('[data-tool]').forEach(b=>b.classList.remove('ring-4','ring-slate-400','ring-offset-1'));
@@ -5499,7 +5697,11 @@ body > .max-w-\[1300px\] {
     while (diff > Math.PI) diff -= Math.PI*2;
     while (diff < -Math.PI) diff += Math.PI*2;
     const steps = Math.max(1, Math.ceil(Math.abs(diff)/0.045));
-    const radius = obj.penRadius || getCompassGeometry(obj).radius;
+    // Bán kính lấy từ hình học đang hiển thị của hai đầu compa,
+    // không dùng penRadius lưu cũ có thể lệch sau khi thay đổi độ mở.
+    const geo = getCompassGeometry(obj);
+    const actualTip = compassSvgToWorld(obj, geo.pencilLocal);
+    const radius = Math.hypot(actualTip.x-obj.x, actualTip.y-obj.y);
     for (let i=1;i<=steps;i++) {
       const a = obj.lastAngle + diff*i/steps;
       obj.activePath.points.push({x:obj.x+radius*Math.cos(a), y:obj.y+radius*Math.sin(a)});
@@ -5507,10 +5709,16 @@ body > .max-w-\[1300px\] {
     obj.lastAngle += diff;
   }
   function startCompassRotation(obj, p) {
+    // V178: Bắt dính điểm ở VỊ TRÍ ĐẦU BÚT BAN ĐẦU trước khi bắt đầu xoay.
+    // Nhờ vậy đầu bút đã chạm điểm ngay khi người dùng vừa nắm nút xoay,
+    // không phải chờ di chuyển chuột mới thực hiện snap.
+    const preRotateSnap = snapCompassPencilToNearestPoint(obj, 36);
+    instrumentSnapPoint = preRotateSnap ? preRotateSnap.point : null;
+
     obj.rotating = true;
     const pointerAngle = Math.atan2(p.y-obj.y,p.x-obj.x);
     obj.startRotationOffset = pointerAngle-(obj.angle||0);
-    // Xoay compa là thao tác duy nhất tạo mực; bắt đầu ngay từ vị trí đầu bút hiện tại.
+    // Xoay compa là thao tác duy nhất tạo mực; bắt đầu từ đầu bút đã bắt dính.
     obj.drawingEnabled = true;
     obj.activePath = null; obj.lastAngle = null;
     const g = getCompassGeometry(obj);
@@ -5745,8 +5953,19 @@ body > .max-w-\[1300px\] {
     }
 
     if(tool==='pen'){
-      if(penMode==='point'){ points.push({x:p.x,y:p.y,name:'',labelR:20,labelTheta:-Math.PI/4,color:penColor,size:Math.max(3,penWidth/2+1)}); } 
-      else if(penMode==='line'){ drawingLine={start:p,end:p}; isDrawing=true; } 
+      if(penMode==='point'){
+        const snappedPoint=snapPenToExistingGeometry(p,15);
+        const target=snappedPoint || p;
+        activeSnapPoint=snappedPoint;
+        points.push({x:target.x,y:target.y,name:'',labelR:20,labelTheta:-Math.PI/4,color:penColor,size:Math.max(3,penWidth/2+1)});
+        hoverSnap=!!snappedPoint;
+      }
+      else if(penMode==='line'){
+        const startSnap=findNearestExistingPoint(p,16);
+        const start=startSnap?{x:startSnap.x,y:startSnap.y}:p;
+        drawingLine={start,end:start}; activeSnapPoint=startSnap||null;
+        hoverSnap=!!startSnap; isDrawing=true;
+      }
       else if(penMode==='freehand'){ drawingPath=[p]; isDrawing=true; }
       return draw();
     }
@@ -5754,35 +5973,156 @@ body > .max-w-\[1300px\] {
     if(tool==='eraser'){ isErasing=true; drawingPath = [p]; eraseObjectsAt(p); return draw(); }
   }
 
+
+  // V168: Tự động bắt dính điểm chuẩn của bốn dụng cụ hình học.
+  let instrumentSnapPoint = null;
+
+  // V171: Khi xoay thước quanh điểm neo, tự căn mép đã neo qua điểm thứ hai.
+  function snapRulerRotationToSecondPoint(candidateAngle, tolerance = 13) {
+    if (!ruler.img || !ruler.img.naturalWidth || points.length < 2) return candidateAngle;
+    const W=getRulerDrawWidth();
+    const sx=W/ruler.img.naturalWidth;
+    const pivotPx=ruler.pivotX;
+    const visibleLeft=26, visibleRight=2030;
+    // Mép trên đi qua tâm neo (vạch 0); tìm điểm thứ hai nằm trên phần mép còn lại.
+    const minAlong=(visibleLeft-pivotPx)*sx;
+    const maxAlong=(visibleRight-pivotPx)*sx;
+    const c=Math.cos(candidateAngle), s=Math.sin(candidateAngle);
+    let best=null;
+    for (const pt of points) {
+      const dx=pt.x-ruler.x, dy=pt.y-ruler.y;
+      const along=dx*c+dy*s;
+      if (along < minAlong || along > maxAlong || Math.abs(along)<8) continue;
+      const perpendicular=Math.abs(-dx*s+dy*c);
+      if (perpendicular<=tolerance && (!best || perpendicular<best.distance)) {
+        best={distance:perpendicular, angle:Math.atan2(dy,dx)};
+      }
+    }
+    return best ? best.angle : candidateAngle;
+  }
+
+  function snapMovingInstrument(type, obj, tolerance = 16) {
+    if (!obj || !points.length) { instrumentSnapPoint = null; return; }
+    let best = null;
+    const consider = (anchor, dx, dy) => {
+      const d = Math.hypot(dx, dy);
+      if (d <= tolerance && (!best || d < best.d)) best = {d, dx, dy, point: anchor.point};
+    };
+    const rotatePoint = (lx, ly) => {
+      const a = obj.angle || 0, c = Math.cos(a), s = Math.sin(a);
+      return {x: obj.x + lx*c - ly*s, y: obj.y + lx*s + ly*c};
+    };
+
+    if (type === 'protractor' || type === 'compa') {
+      // Tâm thước đo góc và đầu kim compa chính là gốc tọa độ x/y của dụng cụ.
+      const anchor = {x:obj.x, y:obj.y};
+      for (const pt of points) {
+        const dx=pt.x-anchor.x, dy=pt.y-anchor.y, d=Math.hypot(dx,dy);
+        if (d<=tolerance && (!best || d<best.d)) best={d,dx,dy,point:pt};
+      }
+    } else if (type === 'eke' && obj.img && obj.img.naturalWidth) {
+      // Đỉnh góc vuông B theo đúng hình học đang dùng trong getEkeZones().
+      const W=obj.size, H=W*(obj.img.naturalHeight/obj.img.naturalWidth);
+      const vertex=rotatePoint(0, H*(.505-.5));
+      for (const pt of points) {
+        const dx=pt.x-vertex.x, dy=pt.y-vertex.y, d=Math.hypot(dx,dy);
+        if (d<=tolerance && (!best || d<best.d)) best={d,dx,dy,point:pt};
+      }
+    } else if (type === 'ruler' && obj.img && obj.img.naturalWidth) {
+      // Bắt dính đúng hai mép dài nhìn thấy của thân thước trong ảnh,
+      // không dùng biên ngoài của tệp ảnh (vốn có vùng trong suốt).
+      const W=getRulerDrawWidth();
+      const H=W*(obj.img.naturalHeight/obj.img.naturalWidth);
+      const sx=W/obj.img.naturalWidth, sy=H/obj.img.naturalHeight;
+      const px=obj.pivotX*sx, py=obj.pivotY*sy;
+      // Tọa độ được hiệu chỉnh theo pixel thực của ảnh thước 2048 × 250:
+      // mép trên y=18, mép dưới y=232; phần thân nhìn thấy từ x=26 đến x=2030.
+      const visibleLeft=26, visibleRight=2030;
+      const visibleLongEdges=[18,232];
+      for (const edgeYpx of visibleLongEdges) {
+        const y=edgeYpx*sy-py;
+        const a=rotatePoint(visibleLeft*sx-px,y), b=rotatePoint(visibleRight*sx-px,y);
+        const vx=b.x-a.x, vy=b.y-a.y, len2=vx*vx+vy*vy;
+        if (!len2) continue;
+        for (const pt of points) {
+          const t=Math.max(0,Math.min(1,((pt.x-a.x)*vx+(pt.y-a.y)*vy)/len2));
+          const qx=a.x+t*vx, qy=a.y+t*vy;
+          const dx=pt.x-qx, dy=pt.y-qy, d=Math.hypot(dx,dy);
+          if (d<=tolerance && (!best || d<best.d)) best={d,dx,dy,point:pt};
+        }
+      }
+    }
+
+    if (best) {
+      obj.x += best.dx;
+      obj.y += best.dy;
+      instrumentSnapPoint = best.point;
+    } else {
+      instrumentSnapPoint = null;
+    }
+  }
+
   function handleMove(p){
     lastPointer=p;
     if (directInstrumentGesture) {
       const g=directInstrumentGesture, obj=g.obj;
       if (g.kind==='compass-move' || g.kind==='protractor-move') {
-        obj.x=g.startCx+(p.x-g.startX); obj.y=g.startCy+(p.y-g.startY); return draw();
+        obj.x=g.startCx+(p.x-g.startX); obj.y=g.startCy+(p.y-g.startY); snapMovingInstrument(g.kind==='compass-move'?'compa':'protractor',obj); return draw();
       }
       if (g.kind==='compass-resize') {
-        const targetX=p.x+g.grabOffsetX, targetY=p.y+g.grabOffsetY;
-        const vx=targetX-obj.x, vy=targetY-obj.y;
+        let targetX=p.x+g.grabOffsetX, targetY=p.y+g.grabOffsetY;
         const legLength=130*(obj.size/200);
         const diameter=2*legLength;
         const minRadius=diameter*Math.sin(5*Math.PI/180);
         const maxRadius=diameter*Math.sin(80*Math.PI/180);
+
+        // V178: Khi đặt/điều chỉnh chân bút trước lúc xoay, chọn điểm gần
+        // vị trí đầu bút dự kiến nhất. Chỉ xét điểm nằm trong vùng khẩu độ hợp lệ.
+        let nearestPoint=null, nearestDistance=36;
+        for (const pt of points) {
+          if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
+          const distance=Math.hypot(pt.x-targetX,pt.y-targetY);
+          if (distance>=nearestDistance) continue;
+          const pointRadius=Math.hypot(pt.x-obj.x,pt.y-obj.y);
+          if (pointRadius<minRadius || pointRadius>maxRadius) continue;
+          nearestPoint=pt;
+          nearestDistance=distance;
+        }
+        if (nearestPoint) {
+          targetX=nearestPoint.x;
+          targetY=nearestPoint.y;
+          instrumentSnapPoint=nearestPoint;
+        } else {
+          instrumentSnapPoint=null;
+        }
+
+        const vx=targetX-obj.x, vy=targetY-obj.y;
         const radius=clamp(Math.hypot(vx,vy),minRadius,maxRadius);
         const ratio=clamp(radius/diameter,Math.sin(5*Math.PI/180),Math.sin(80*Math.PI/180));
         const half=Math.asin(ratio);
         obj.openAngle=clamp(2*half*180/Math.PI,10,160);
         // Hướng compa cũng theo hướng chân bút; chân kim obj.x/obj.y không đổi.
         const targetAngle=Math.atan2(vy,vx);
-        const pencilOffset=obj.flipped?0:Math.PI;
-        obj.angle=targetAngle-pencilOffset;
+        const resizedGeo=getCompassGeometry(obj);
+        const localPencilAngle=Math.atan2(
+          resizedGeo.pencilLocal.y-resizedGeo.pinLocal.y,
+          resizedGeo.pencilLocal.x-resizedGeo.pinLocal.x
+        );
+        // Tính đúng góc lệch của chân bút theo hình học compa (kể cả khi lật).
+        obj.angle=targetAngle-localPencilAngle;
+        obj.penRadius=resizedGeo.radius;
         return draw();
       }
       if (g.kind==='compass-rotate') {
         let ang=Math.atan2(p.y-obj.y,p.x-obj.x)-g.obj.startRotationOffset;
         let step=null; if(modifiers.shift&&modifiers.alt)step=1;else if(modifiers.shift)step=15;else if(modifiers.alt)step=5;
         if(step){const deg=(ang*180/Math.PI+360)%360;ang=Math.round(deg/step)*step*Math.PI/180;}
+
+        // Cập nhật hướng người dùng yêu cầu trước, sau đó đo khoảng cách từ
+        // đầu bút đang hiển thị đến TẤT CẢ điểm; điểm gần nhất hợp lệ được ưu tiên.
         obj.angle=ang;
+        if (obj.drawingEnabled) snapCompassPencilToNearestPoint(obj, 36);
+
         if(obj.drawingEnabled && obj.activePath){
           const geo=getCompassGeometry(obj), tip=compassSvgToWorld(obj,geo.pencilLocal);
           appendCompassInkPoint(obj,Math.atan2(tip.y-obj.y,tip.x-obj.x));
@@ -5824,11 +6164,32 @@ body > .max-w-\[1300px\] {
         let step = null; if (modifiers.shift && modifiers.alt) step = 1; else if(modifiers.shift) step = 15; else if(modifiers.alt) step = 5;
         if(step){ const deg = (ang*180/Math.PI + 360)%360; ang = Math.round(deg/step)*step*Math.PI/180; }
         
-        let penAng = compa.flipped ? ang + Math.PI : ang; 
+        // Góc đầu bút thực tế = góc thân compa + góc lệch của chân bút
+        // trong hình học SVG. Không thể dùng trực tiếp ang hoặc ang + PI.
+        const compassGeo = getCompassGeometry(compa);
+        const pencilLocalOffset = Math.atan2(
+          compassGeo.pencilLocal.y - compassGeo.pinLocal.y,
+          compassGeo.pencilLocal.x - compassGeo.pinLocal.x
+        );
+        let penAng = ang + pencilLocalOffset;
+
+        if (compa.drawingEnabled) {
+          // Tìm điểm gần vị trí đầu bút theo đúng bán kính hình học hiện tại.
+          const snappedAngle = snapCompassPencilAngle(compa, penAng, 22);
+          const angleDelta = Math.atan2(
+            Math.sin(snappedAngle - penAng),
+            Math.cos(snappedAngle - penAng)
+          );
+          if (Math.abs(angleDelta) > 1e-7) {
+            penAng = snappedAngle;
+            // Xoay cả thân compa để đầu bút thật sự trùng tọa độ điểm.
+            ang = penAng - pencilLocalOffset;
+          }
+        }
         
         if (compa.drawingEnabled) {
           if (!compa.activePath) {
-            compa.penRadius = 136.25 * (compa.size / 360);
+            compa.penRadius = getCompassGeometry(compa).radius;
             compa.activePath = { points: [], color: penColor, width: penWidth };
             const px = compa.x + compa.penRadius * Math.cos(penAng);
             const py = compa.y + compa.penRadius * Math.sin(penAng);
@@ -5870,6 +6231,9 @@ body > .max-w-\[1300px\] {
           const deg = (ang * 180 / Math.PI + 360) % 360;
           ang = Math.round(deg / step) * step * Math.PI / 180;
         }
+        // Giữ nguyên điểm neo thứ nhất; nếu mép thước tiến gần điểm khác,
+        // tự xoay chính xác để mép đó đi qua điểm thứ hai.
+        ang = snapRulerRotationToSecondPoint(ang);
         ruler.angle = ang;
         return draw();
       }
@@ -5932,15 +6296,27 @@ body > .max-w-\[1300px\] {
         return draw();
       }
 
-      if (protractor.dragging) { protractor.x = p.x - protractor.offsetX; protractor.y = p.y - protractor.offsetY; return draw(); }
-      if (eke.dragging) { eke.x = p.x - eke.offsetX; eke.y = p.y - eke.offsetY; return draw(); }
-      if (compa.dragging) { compa.x = p.x - compa.offsetX; compa.y = p.y - compa.offsetY; return draw(); }
-      if(ruler.dragging){ ruler.x=p.x-ruler.offsetX; ruler.y=p.y-ruler.offsetY; return draw(); }
+      if (protractor.dragging) { protractor.x = p.x - protractor.offsetX; protractor.y = p.y - protractor.offsetY; snapMovingInstrument('protractor',protractor); return draw(); }
+      if (eke.dragging) { eke.x = p.x - eke.offsetX; eke.y = p.y - eke.offsetY; snapMovingInstrument('eke',eke); return draw(); }
+      if (compa.dragging) { compa.x = p.x - compa.offsetX; compa.y = p.y - compa.offsetY; snapMovingInstrument('compa',compa); return draw(); }
+      if(ruler.dragging){ ruler.x=p.x-ruler.offsetX; ruler.y=p.y-ruler.offsetY; snapMovingInstrument('ruler',ruler); return draw(); }
       return draw();
     }
 
     if(tool==='pen' && isDrawing){
-      if(penMode==='line'){ const snapped = snapToRuler(drawingLine.start, p); drawingLine.end = snapped.end; }
+      if(penMode==='line'){
+        // V167: Ưu tiên bắt dính vào điểm đã có trên bảng trước khi xét thước.
+        const nearest = findNearestExistingPoint(p, 16);
+        if (nearest) {
+          drawingLine.end = {x: nearest.x, y: nearest.y};
+          hoverSnap = true;
+          activeSnapPoint = nearest;
+        } else {
+          activeSnapPoint = null;
+          const snapped = snapToRuler(drawingLine.start, p);
+          drawingLine.end = snapped.end;
+        }
+      }
       else if(penMode==='freehand'){ drawingPath.push(p); }
       return draw();
     }
@@ -5956,8 +6332,10 @@ body > .max-w-\[1300px\] {
     selectionBox=null; selectionStart=null; draggingSelection=false; selectionDragSnapshot=null;
     if(tool==='pen' && isDrawing){
       if(penMode==='line' && drawingLine){
+        const finalSnap = findNearestExistingPoint(drawingLine.end, 16);
+        if (finalSnap) drawingLine.end = {x: finalSnap.x, y: finalSnap.y};
         const s = {a: drawingLine.start, b: drawingLine.end, color:penColor, width:penWidth, lineStyle:penLineStyle, label: '', labelT:0.5, labelN:-10, zOrder: drawOrder++};
-        segments.push(s); drawingLine=null; draw();
+        segments.push(s); drawingLine=null; activeSnapPoint=null; draw();
       } else if(penMode==='freehand' && drawingPath){
         freehandPaths.push({points:drawingPath, color:penColor, width:penWidth, lineStyle:penLineStyle, zOrder: drawOrder++}); drawingPath=null;
       }
@@ -5985,6 +6363,7 @@ body > .max-w-\[1300px\] {
     compa.dragging = false; compa.rotating = false; compa.scaling = false;
     for (const list of Object.values(instrumentInstances)) list.forEach(obj => { obj.dragging = false; obj.rotating = false; obj.scaling = false; });
     directInstrumentGesture = null;
+    instrumentSnapPoint = null;
     isDrawing=false; isErasing=false; setCursor(); draw();
   }
 
