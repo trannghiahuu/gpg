@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="description" content="PGP Plane Geometry Practice - tích hợp compa SVG và điều khiển thước đo góc trực tiếp" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>PGP | Plane Geometry Practice | V3.1</title>
+  <title>PGP | Plane Geometry Practice | V3.2</title>
 
   <style>
 /* Tailwind utilities bundled locally for offline use */
@@ -3591,7 +3591,10 @@ body > .max-w-\[1300px\] {
   const autoPromptLineName = false;
   
   const INFINITE_HEIGHT = 5000; 
-  let boardZoom = 1; 
+  let boardZoom = 1;
+  // V191: Giới hạn mật độ render để canvas lớn không chiếm quá nhiều RAM/GPU.
+  let canvasRenderScale = 1;
+  const MAX_CANVAS_RENDER_SCALE = 2.2;
   let toolZIndexCounter = 1; 
 
   // Tâm neo được căn chuẩn trên ảnh nhúng V5 kích thước 2048 × 250 px.
@@ -3807,7 +3810,9 @@ body > .max-w-\[1300px\] {
   let hoverSnap = false;
   let activeSnapPoint = null;
   function findNearestExistingPoint(pos, tolerance = 16) {
-    let nearest = null, best = tolerance;
+    // Vùng bắt điểm không nhỏ hơn 10 CSS px khi thu nhỏ canvas.
+    const effectiveTolerance = Math.max(tolerance, 10 / Math.max(0.1, boardZoom));
+    let nearest = null, best = effectiveTolerance;
     for (const pt of points) {
       const d = Math.hypot(pos.x - pt.x, pos.y - pt.y);
       if (d <= best) { best = d; nearest = pt; }
@@ -3939,16 +3944,19 @@ body > .max-w-\[1300px\] {
 
   function resizeCanvas(){
     const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const cssW = wrap.clientWidth; 
+    const cssW = wrap.clientWidth;
     const cssH = INFINITE_HEIGHT;
 
     canvas.style.width  = (cssW * boardZoom) + 'px';
     canvas.style.height = (cssH * boardZoom) + 'px';
-    
-    canvas.width  = Math.round(cssW * boardZoom * dpr);
-    canvas.height = Math.round(cssH * boardZoom * dpr);
-    
-    ctx.setTransform(dpr * boardZoom, 0, 0, dpr * boardZoom, 0, 0);
+
+    // Kích thước hiển thị vẫn theo boardZoom; chỉ giới hạn độ phân giải bitmap.
+    // Khi zoom lớn, giảm đáng kể số pixel phải xóa/vẽ lại ở mỗi thao tác.
+    canvasRenderScale = Math.min(dpr * boardZoom, MAX_CANVAS_RENDER_SCALE);
+    canvas.width  = Math.max(1, Math.round(cssW * canvasRenderScale));
+    canvas.height = Math.max(1, Math.round(cssH * canvasRenderScale));
+
+    ctx.setTransform(canvasRenderScale, 0, 0, canvasRenderScale, 0, 0);
     draw();
   }
   window.addEventListener('resize', resizeCanvas);
@@ -4104,7 +4112,8 @@ body > .max-w-\[1300px\] {
     if(!instrumentInstances.ruler.some(o => o.visible)){ hoverSnap = false; return { end: current, angle: Math.atan2(current.y-start.y, current.x-start.x) }; }
     const angle = ruler.angle;
     const d = Math.abs(pointLineDistance(current, {x:ruler.x, y:ruler.y}, angle));
-    const snapped = (d <= SNAP_DIST); hoverSnap = snapped;
+    const effectiveSnapDist = Math.max(SNAP_DIST, 10 / Math.max(0.1, boardZoom));
+    const snapped = (d <= effectiveSnapDist); hoverSnap = snapped;
     if(snapped){ const endOnDir = projectPointOntoAngle(current, start, angle); return { end:endOnDir, angle }; }
     return { end: current, angle: Math.atan2(current.y-start.y, current.x-start.x) };
   }
@@ -4129,7 +4138,13 @@ body > .max-w-\[1300px\] {
     return { x: tx - LABEL_PAD, y: ty - LABEL_PAD, w: w + 2*LABEL_PAD, h: LABEL_H + 2*LABEL_PAD, tx, ty, cx, cy, wtxt:w };
   }
   function hitPointLabel(p){
-    for(let i=points.length-1;i>=0;i--){ const r = pointLabelRect(points[i]); if(r && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) return i; } return -1;
+    const pad = Math.max(3, 8 / Math.max(0.1, boardZoom));
+    for(let i=points.length-1;i>=0;i--){
+      const r = pointLabelRect(points[i]);
+      if(r && p.x >= r.x-pad && p.x <= r.x+r.w+pad &&
+             p.y >= r.y-pad && p.y <= r.y+r.h+pad) return i;
+    }
+    return -1;
   }
 
   function drawMixedLayers() {
@@ -4177,8 +4192,8 @@ body > .max-w-\[1300px\] {
   function drawCmGrid(){
     if (!showCmGrid) return;
     const step = pxPerCm;
-    const logicalW = canvas.width / (Math.max(1, window.devicePixelRatio || 1) * boardZoom);
-    const logicalH = canvas.height / (Math.max(1, window.devicePixelRatio || 1) * boardZoom);
+    const logicalW = canvas.width / Math.max(0.01, canvasRenderScale);
+    const logicalH = canvas.height / Math.max(0.01, canvasRenderScale);
     ctx.save();
     ctx.lineWidth = 0.7;
     // Đường ô ly 1 cm; mỗi 5 cm có đường đậm hơn.
@@ -4537,7 +4552,9 @@ body > .max-w-\[1300px\] {
     const dx = p.x - ruler.x, dy = p.y - ruler.y;
     const cosA = Math.cos(-ruler.angle), sinA = Math.sin(-ruler.angle);
     const localX = dx * cosA - dy * sinA, localY = dx * sinA + dy * cosA;
-    return localX >= -pivotX && localX <= w - pivotX && localY >= -pivotY && localY <= h - pivotY;
+    const hitPad = Math.min(28, 12 / Math.max(0.1, boardZoom));
+    return localX >= -pivotX - hitPad && localX <= w - pivotX + hitPad &&
+           localY >= -pivotY - hitPad && localY <= h - pivotY + hitPad;
   }
 
   // Vùng xoay của thước thẳng: dải mép trên/dưới và hai đầu thước.
@@ -4552,8 +4569,9 @@ body > .max-w-\[1300px\] {
     const cosA = Math.cos(-ruler.angle), sinA = Math.sin(-ruler.angle);
     const lx = dx * cosA - dy * sinA + pivotX;
     const ly = dx * sinA + dy * cosA + pivotY;
-    const edgeY = Math.max(7, h * 0.18);
-    const edgeX = Math.max(10, w * 0.025);
+    const edgeTouchBand = Math.min(28, 12 / Math.max(0.1, boardZoom));
+    const edgeY = Math.max(7, h * 0.18, edgeTouchBand);
+    const edgeX = Math.max(10, w * 0.025, edgeTouchBand);
     return ly <= edgeY || ly >= h - edgeY || lx <= edgeX || lx >= w - edgeX;
   }
 
@@ -4610,6 +4628,8 @@ body > .max-w-\[1300px\] {
   function getEkeZones(p) {
     const q=getEkeLocalPoint(p); if(!q) return {move:false,rotate:false,scale:false,inside:false};
     const {x,y,W,H}=q;
+    const ekeScreenScale = (eke.size / Math.max(1, W)) * boardZoom;
+    const touchTolerance = Math.min(32, 12 / Math.max(0.05, ekeScreenScale));
 
     // Thân ê ke là tam giác vuông lớn nằm ở góc trên-bên phải ảnh.
     const A={x:W*.50,y:H*.02};
@@ -4625,7 +4645,7 @@ body > .max-w-\[1300px\] {
 
     // Hai mũi nhọn A và C là vùng thu/phóng; B là tâm neo, không phải tay nắm.
     const dA=Math.hypot(x-A.x,y-A.y), dC=Math.hypot(x-C.x,y-C.y);
-    const scaleRadius=Math.max(22,Math.min(W,H)*.014);
+    const scaleRadius=Math.max(22,Math.min(W,H)*.014) + touchTolerance;
     const scale=dA<=scaleRadius || dC<=scaleRadius;
 
     const outerEdge=Math.min(
@@ -4633,10 +4653,9 @@ body > .max-w-\[1300px\] {
       pointSegmentDistance(x,y,B.x,B.y,C.x,C.y),
       pointSegmentDistance(x,y,C.x,C.y,A.x,A.y)
     );
-    // V69: Loại bỏ hoàn toàn mép tam giác rỗng bên trong khỏi vùng tương tác.
-    // Chỉ đường viền ngoài của ê ke mới là vùng xoay; lòng tam giác rỗng không nhận kéo.
-    const edgeBand=Math.max(14,Math.min(W,H)*.014);
-    const body=outer && !hole;
+    // Nới vùng bắt ra ngoài biên, nhưng không nhận phần tam giác rỗng.
+    const edgeBand=Math.max(14,Math.min(W,H)*.014) + touchTolerance;
+    const body=(outer || outerEdge<=touchTolerance) && !hole;
     const rotate=body && !scale && outerEdge<=edgeBand;
     const move=body && !scale && !rotate;
     const inside=move || rotate || scale;
@@ -4659,13 +4678,19 @@ body > .max-w-\[1300px\] {
     const holder = rotateCompassPoint(q.x, q.y, -g.sign*g.half);
     const needle = rotateCompassPoint(q.x, q.y, g.sign*g.half);
     const lockY = 20 + 50 * Math.cos(g.half);
-    const lock = Math.hypot(q.x-60, q.y-lockY) <= 8;
-    const flip = Math.hypot(q.x-60, q.y-20) <= 6.5;
-    const rotate = pointInCompassRect(q, 50, -5, 20, 25);
-    // Kéo trên thân/chân bút (kể cả vùng gần đầu bút) để đặt chân bút theo con trỏ.
-    // Không có vùng bấm bật/tắt mực riêng nữa.
-    const resize = pointInCompassRect(holder, 45, 10, 30, 140);
-    const move = pointInCompassRect(needle, 50, 20, 20, 130);
+    const touchTolerance = Math.min(28, 12 / Math.max(0.05, g.scale * boardZoom));
+    const lock = Math.hypot(q.x-60, q.y-lockY) <= 8 + touchTolerance;
+    const flip = Math.hypot(q.x-60, q.y-20) <= 6.5 + touchTolerance;
+    const rotate = pointInCompassRect(q,
+      50-touchTolerance, -5-touchTolerance,
+      20+2*touchTolerance, 25+2*touchTolerance);
+    // Vùng bắt mở rộng theo zoom, không thay đổi hình học hiển thị của compa.
+    const resize = pointInCompassRect(holder,
+      45-touchTolerance, 10-touchTolerance,
+      30+2*touchTolerance, 140+2*touchTolerance);
+    const move = pointInCompassRect(needle,
+      50-touchTolerance, 20-touchTolerance,
+      20+2*touchTolerance, 130+2*touchTolerance);
     let leg = null;
     if (resize && move) {
       const holderDist = Math.abs(holder.x-60) / 15;
@@ -4693,7 +4718,11 @@ body > .max-w-\[1300px\] {
   function draw(){
     if (!canvas.offsetWidth) return;
     const mainCtx = ctx;
-    mainCtx.clearRect(0,0,canvas.width,canvas.height);
+    mainCtx.clearRect(
+      0, 0,
+      canvas.width / Math.max(0.01, canvasRenderScale),
+      canvas.height / Math.max(0.01, canvasRenderScale)
+    );
     drawCmGrid();
 
     // 1) Ảnh chèn nằm dưới lớp hình vẽ và dưới các dụng cụ.
@@ -4865,7 +4894,7 @@ body > .max-w-\[1300px\] {
     });
   }
 
-  // PGP V190: Ảnh lấy từ clipboard thường có kích thước theo pixel màn hình
+  // PGP V191: Ảnh lấy từ clipboard thường có kích thước theo pixel màn hình
   // (physical pixels), trong khi tọa độ canvas dùng CSS/logical pixels.
   // Quy đổi theo DPR × boardZoom để tránh ảnh bị phóng lớn thêm lần nữa.
   // Nhờ vậy ảnh chụp cây thước đang hiển thị ở mức zoom 100% giữ đúng tỷ lệ cm
@@ -5624,16 +5653,16 @@ body > .max-w-\[1300px\] {
     const ti=hitText(p); if(ti>=0) return {type:'text',index:ti};
     const pi=hitPointLabel(p); if(pi>=0) return {type:'pointLabel',index:pi};
     for(let i=points.length-1;i>=0;i--){
-      if(Math.hypot(points[i].x-p.x,points[i].y-p.y)<=Math.max(8,penWidth+4)) return {type:'point',index:i};
+      if(Math.hypot(points[i].x-p.x,points[i].y-p.y)<=Math.max(8,penWidth+4,10/Math.max(0.1,boardZoom))) return {type:'point',index:i};
     }
     for(let i=segments.length-1;i>=0;i--){
       const s=segments[i];
-      if(distPointToSeg(p,s.a,s.b) <= Math.max(7,(s.width||2)+4)) return {type:'segment',index:i};
+      if(distPointToSeg(p,s.a,s.b) <= Math.max(7,(s.width||2)+4,10/Math.max(0.1,boardZoom))) return {type:'segment',index:i};
     }
     for(let i=freehandPaths.length-1;i>=0;i--){
       const f=freehandPaths[i]; if(f.isEraser) continue;
       const pts=f.points||f;
-      for(let j=pts.length-1;j>=1;j--) if(distPointToSeg(p,pts[j-1],pts[j]) <= Math.max(7,(f.width||2)+4)) return {type:'freehand',index:i};
+      for(let j=pts.length-1;j>=1;j--) if(distPointToSeg(p,pts[j-1],pts[j]) <= Math.max(7,(f.width||2)+4,10/Math.max(0.1,boardZoom))) return {type:'freehand',index:i};
     }
     const ii=hitImage(p); if(ii>=0) return {type:'image',index:ii};
     return null;
@@ -5712,13 +5741,15 @@ body > .max-w-\[1300px\] {
     const k = obj.size/400;
     const u = lx/k + 200, v = ly/k + 200;
     const r = Math.hypot(u-200,v-200);
-    const rotate = (u>=0 && u<=40 && v>=170 && v<=230) || (u>=360 && u<=400 && v>=170 && v<=230);
-    // V67: Vùng phóng to/thu nhỏ đặt ở VÒNG CUNG NGOÀI HƠN,
-    // sát phía trong của mép cung ngoài cùng (khu vực các vạch chia xanh ngoài).
-    // Dải bán kính 178–198 trong hệ tọa độ 400×400; thao tác di chuyển
-    // chỉ nhận ở phía trong r<178 để hai vùng không chồng lấn.
-    const scale = v<=200 && r>=178 && r<=198;
-    const move = v<=200 && r<178;
+    const touchTolerance = Math.min(30, 12 / Math.max(0.05, k * boardZoom));
+    const rotate = (u>=-touchTolerance && u<=40+touchTolerance &&
+                    v>=170-touchTolerance && v<=230+touchTolerance) ||
+                   (u>=360-touchTolerance && u<=400+touchTolerance &&
+                    v>=170-touchTolerance && v<=230+touchTolerance);
+    // Vùng thu phóng được mở rộng theo zoom; ưu tiên trước vùng di chuyển.
+    const scale = v<=200+touchTolerance &&
+                  r>=178-touchTolerance && r<=198+touchTolerance;
+    const move = v<=200+touchTolerance && r<178+touchTolerance;
     return {rotate,scale,move};
   }
   function appendCompassInkPoint(obj, nextAngle) {
@@ -6331,7 +6362,8 @@ body > .max-w-\[1300px\] {
       if (eke.dragging) { eke.x = p.x - eke.offsetX; eke.y = p.y - eke.offsetY; snapMovingInstrument('eke',eke); return draw(); }
       if (compa.dragging) { compa.x = p.x - compa.offsetX; compa.y = p.y - compa.offsetY; snapMovingInstrument('compa',compa); return draw(); }
       if(ruler.dragging){ ruler.x=p.x-ruler.offsetX; ruler.y=p.y-ruler.offsetY; snapMovingInstrument('ruler',ruler); return draw(); }
-      return draw();
+      // V191: Hover được cập nhật bằng lớp gợi ý DOM; không cần dựng lại canvas.
+      return;
     }
 
     if(tool==='pen' && isDrawing){
@@ -6353,7 +6385,8 @@ body > .max-w-\[1300px\] {
     }
 
     if(tool==='eraser' && isErasing){ if(!drawingPath) drawingPath = []; drawingPath.push(p); eraseObjectsAt(p); return draw(); }
-    draw();
+    // Chỉ dựng lại khi cần cập nhật vòng tròn tẩy hoặc con trỏ bút cảm ứng.
+    if (tool === 'eraser' || (tool === 'pen' && penTouchCursorVisible)) draw();
   }
 
   function handleEnd(){
@@ -6400,16 +6433,23 @@ body > .max-w-\[1300px\] {
 
   function hitText(p) {
     ctx.save();
+    const pad = Math.max(4, 8 / Math.max(0.1, boardZoom));
     for(let i=texts.length-1; i>=0; i--) {
       const t = texts[i]; ctx.font = `${t.size || 16}px Arial`;
       const w = ctx.measureText(t.text).width, h = t.size || 16;
-      if (p.x >= t.x - 4 && p.x <= t.x + w + 4 && p.y >= t.y - 4 && p.y <= t.y + h + 4) { ctx.restore(); return i; }
+      if (p.x >= t.x-pad && p.x <= t.x+w+pad &&
+          p.y >= t.y-pad && p.y <= t.y+h+pad) { ctx.restore(); return i; }
     }
     ctx.restore(); return -1;
   }
 
   function hitImage(p) {
-    for(let i=images.length-1; i>=0; i--) { const img = images[i]; if (p.x >= img.x && p.x <= img.x + img.w && p.y >= img.y && p.y <= img.y + img.h) { return i; } }
+    const pad = Math.max(4, 8 / Math.max(0.1, boardZoom));
+    for(let i=images.length-1; i>=0; i--) {
+      const img = images[i];
+      if (p.x >= img.x-pad && p.x <= img.x+img.w+pad &&
+          p.y >= img.y-pad && p.y <= img.y+img.h+pad) return i;
+    }
     return -1;
   }
   
