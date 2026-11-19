@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="description" content="PGP Plane Geometry Practice - tích hợp compa SVG và điều khiển thước đo góc trực tiếp" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>PGP | Plane Geometry Practice | V3.2</title>
+  <title>PGP | Plane Geometry Practice | V3.3</title>
 
   <style>
 /* Tailwind utilities bundled locally for offline use */
@@ -3637,7 +3637,7 @@ body > .max-w-\[1300px\] {
     dragging: false, rotating: false, scaling: false, 
     activePath: null, lastAngle: null, flipped: false, drawingEnabled: false,
     // V56: không còn bật/tắt mực thủ công; mực chỉ xuất hiện trong lúc xoay compa.
-    openAngle: 40, isLocked: false,
+    openAngle: 40, isLocked: false, legExtension: 0,
     zIndex: 0, img: new Image() 
   };
   // Compa is drawn from the source HTML's SVG geometry; no PNG compa image is used.
@@ -3670,6 +3670,7 @@ body > .max-w-\[1300px\] {
       copy.activePath = null; copy.lastAngle = null;
       copy.flipped = !!source.flipped; copy.drawingEnabled = false;
       copy.openAngle = Number.isFinite(source.openAngle) ? source.openAngle : 40;
+      copy.legExtension = Number.isFinite(source.legExtension) ? clamp(source.legExtension, 0, 260) : 0;
       copy.isLocked = false;
       copy.penRadius = 0;
     }
@@ -3794,7 +3795,7 @@ body > .max-w-\[1300px\] {
   function hideInstrument(type, obj) {
     obj.visible = false;
     obj.dragging = false; obj.rotating = false; obj.scaling = false;
-    if (type === 'compa') { obj.activePath = null; obj.lastAngle = null; obj.drawingEnabled = false; }
+    if (type === 'compa') { obj.activePath = null; obj.lastAngle = null; obj.drawingEnabled = false; obj.legExtension = 0; }
     syncInstrumentButtonStates();
     draw();
   }
@@ -4262,11 +4263,14 @@ body > .max-w-\[1300px\] {
     const opening = clamp(Number.isFinite(obj.openAngle) ? obj.openAngle : 40, 10, 160);
     const half = opening * Math.PI / 360;
     const sign = obj.flipped ? -1 : 1;
-    const pinLocal = rotateCompassPoint(60, 150, -sign * half);
-    const pencilLocal = rotateCompassPoint(60, 150, sign * half);
+    // Hai ống nối dài telescopic tăng đồng thời chiều dài hai chân compa.
+    const extension = clamp(Number.isFinite(obj.legExtension) ? obj.legExtension : 0, 0, 260);
+    const tipY = 150 + extension;
+    const pinLocal = rotateCompassPoint(60, tipY, -sign * half);
+    const pencilLocal = rotateCompassPoint(60, tipY, sign * half);
     // SVG gốc 120x200 được hiển thị ở 240x400; map về kích thước dụng cụ PGP.
     const scale = obj.size / 200;
-    return { opening, half, sign, pinLocal, pencilLocal, scale,
+    return { opening, half, sign, pinLocal, pencilLocal, scale, extension,
       radius: Math.hypot(pencilLocal.x - pinLocal.x, pencilLocal.y - pinLocal.y) * scale };
   }
   function compassSvgToWorld(obj, point) {
@@ -4279,7 +4283,8 @@ body > .max-w-\[1300px\] {
   function drawCompa() {
     if (!compa.visible) return;
     const g = getCompassGeometry(compa);
-    const {half, sign, pinLocal, scale} = g;
+    const {half, sign, pinLocal, scale, extension} = g;
+    const legStretch = (130 + extension) / 130;
     const attach = 50;
     const lockY = 20 + attach * Math.cos(half);
     const lockDx = sign * attach * Math.sin(half);
@@ -4375,13 +4380,24 @@ body > .max-w-\[1300px\] {
     // Chân giữ bút: thu gọn cùng bề rộng 9.5 đơn vị như chân kim compa.
     // Phần kim loại phía trên dùng cùng dải màu với chân gắn kim.
     ctx.save();
-    ctx.translate(60, 20); ctx.rotate(sign * half); ctx.translate(-60, -20);
+    ctx.translate(60, 20); ctx.rotate(sign * half); ctx.scale(1, legStretch); ctx.translate(-60, -20);
     const orange = ctx.createLinearGradient(50, 0, 69, 0);
     orange.addColorStop(0, '#B94A08'); orange.addColorStop(.25, '#FF9A16');
     orange.addColorStop(.52, '#FFE08A'); orange.addColorStop(.76, '#F07819'); orange.addColorStop(1, '#9C3D08');
 
     // Phần trên khớp nối gắn bút: cùng chất liệu và màu kim loại với chân kim.
     glossyTube(60, 17, 60, 91, 9.5, metalGradient);
+    if (extension > 0.5) {
+      // Vòng khóa ống trượt bằng kim loại, thể hiện rõ cơ cấu nối dài.
+      ctx.save();
+      const collarY = 101;
+      const collar = ctx.createLinearGradient(54, 0, 66, 0);
+      collar.addColorStop(0, '#566675'); collar.addColorStop(.25, '#F8FCFF');
+      collar.addColorStop(.55, '#A8B8C6'); collar.addColorStop(1, '#526372');
+      ctx.fillStyle = collar; ctx.strokeStyle = '#405363'; ctx.lineWidth = .8;
+      roundedCompassRect(54.5, collarY, 11, 5.5, 1.8); ctx.stroke();
+      ctx.restore();
+    }
     // Ống bút cam phía dưới.
     ctx.save(); ctx.shadowColor='rgba(20,35,55,.35)'; ctx.shadowBlur=5; ctx.shadowOffsetY=3;
     ctx.fillStyle=orange; ctx.strokeStyle='#8B430D'; ctx.lineWidth=1.2;
@@ -4470,8 +4486,17 @@ body > .max-w-\[1300px\] {
 
     // Chân kim bằng hợp kim bạc, mũi kim đỏ.
     ctx.save();
-    ctx.translate(60, 20); ctx.rotate(-sign * half); ctx.translate(-60, -20);
+    ctx.translate(60, 20); ctx.rotate(-sign * half); ctx.scale(1, legStretch); ctx.translate(-60, -20);
     glossyTube(60, 22, 60, 105, 9.5, metalGradient);
+    if (extension > 0.5) {
+      ctx.save();
+      const collar = ctx.createLinearGradient(54, 0, 66, 0);
+      collar.addColorStop(0, '#566675'); collar.addColorStop(.25, '#F8FCFF');
+      collar.addColorStop(.55, '#A8B8C6'); collar.addColorStop(1, '#526372');
+      ctx.fillStyle = collar; ctx.strokeStyle = '#405363'; ctx.lineWidth = .8;
+      roundedCompassRect(54.5, 101, 11, 5.5, 1.8); ctx.stroke();
+      ctx.restore();
+    }
     ctx.save(); ctx.shadowColor='rgba(0,0,0,.28)'; ctx.shadowBlur=3; ctx.shadowOffsetY=2;
     ctx.fillStyle=metalGradient; ctx.strokeStyle='#526170'; ctx.lineWidth=.8;
     compassPolygon([[55,100],[65,100],[63.5,127],[60,137],[56.5,127]]); ctx.stroke();
@@ -4894,7 +4919,7 @@ body > .max-w-\[1300px\] {
     });
   }
 
-  // PGP V191: Ảnh lấy từ clipboard thường có kích thước theo pixel màn hình
+  // PGP V192: Ảnh lấy từ clipboard thường có kích thước theo pixel màn hình
   // (physical pixels), trong khi tọa độ canvas dùng CSS/logical pixels.
   // Quy đổi theo DPR × boardZoom để tránh ảnh bị phóng lớn thêm lần nữa.
   // Nhờ vậy ảnh chụp cây thước đang hiển thị ở mức zoom 100% giữ đúng tỷ lệ cm
@@ -6133,13 +6158,14 @@ body > .max-w-\[1300px\] {
       }
       if (g.kind==='compass-resize') {
         let targetX=p.x+g.grabOffsetX, targetY=p.y+g.grabOffsetY;
-        const legLength=130*(obj.size/200);
-        const diameter=2*legLength;
-        const minRadius=diameter*Math.sin(5*Math.PI/180);
-        const maxRadius=diameter*Math.sin(80*Math.PI/180);
+        const baseLegLength=130*(obj.size/200);
+        const maxExtension=260*(obj.size/200);
+        const minRadius=2*baseLegLength*Math.sin(5*Math.PI/180);
+        const maxRadius=2*(baseLegLength+maxExtension)*Math.sin(80*Math.PI/180);
 
-        // V178: Khi đặt/điều chỉnh chân bút trước lúc xoay, chọn điểm gần
-        // vị trí đầu bút dự kiến nhất. Chỉ xét điểm nằm trong vùng khẩu độ hợp lệ.
+        // V192: Khi kéo chân bút vượt khẩu độ cực đại thông thường,
+        // hai ống nối dài tự động trượt ra đồng đều để tăng bán kính.
+        // Điểm bắt dính vẫn được ưu tiên nếu nằm trong miền bán kính khả thi.
         let nearestPoint=null, nearestDistance=36;
         for (const pt of points) {
           if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
@@ -6159,7 +6185,14 @@ body > .max-w-\[1300px\] {
         }
 
         const vx=targetX-obj.x, vy=targetY-obj.y;
-        const radius=clamp(Math.hypot(vx,vy),minRadius,maxRadius);
+        const requestedRadius=clamp(Math.hypot(vx,vy),minRadius,maxRadius);
+        const maxBaseRadius=2*baseLegLength*Math.sin(80*Math.PI/180);
+        const requiredLegLength=requestedRadius/(2*Math.sin(80*Math.PI/180));
+        const actualLegLength=clamp(requiredLegLength,baseLegLength,baseLegLength+maxExtension);
+        obj.legExtension=(actualLegLength-baseLegLength)*200/obj.size;
+        const diameter=2*actualLegLength;
+        const radius=clamp(requestedRadius,2*actualLegLength*Math.sin(5*Math.PI/180),
+                           2*actualLegLength*Math.sin(80*Math.PI/180));
         const ratio=clamp(radius/diameter,Math.sin(5*Math.PI/180),Math.sin(80*Math.PI/180));
         const half=Math.asin(ratio);
         obj.openAngle=clamp(2*half*180/Math.PI,10,160);
