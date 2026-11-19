@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="description" content="PGP Plane Geometry Practice - tích hợp compa SVG và điều khiển thước đo góc trực tiếp" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>PGP | Plane Geometry Practice | V3.3</title>
+  <title>PGP | Plane Geometry Practice | V3.4</title>
 
   <style>
 /* Tailwind utilities bundled locally for offline use */
@@ -3612,7 +3612,9 @@ body > .max-w-\[1300px\] {
   let protractor = { 
     x: 150, y: 150, size: 300, angle: 0, visible: false, 
     dragging: false, rotating: false, scaling: false, 
-    pivotRatioX: 1024 / 2048, pivotRatioY: 1024 / 2048,
+    // V195: Tâm neo hiệu chỉnh theo tâm thực tế của dấu đỏ/tâm đen trên ảnh gốc 2048×2048.
+    // Phân tích ảnh gốc: tâm dấu đỏ x≈1026, y≈1023 (không đúng tuyệt đối tâm bitmap 1024,1024).
+    pivotRatioX: 1026 / 2048, pivotRatioY: 1023 / 2048,
     zIndex: 0, img: new Image() 
   };
   protractor.img.onload = () => { if (protractor.visible) draw(); }; 
@@ -4223,8 +4225,12 @@ body > .max-w-\[1300px\] {
     ctx.rotate(ruler.angle);
     ctx.drawImage(ruler.img, -pivotX, -pivotY, w, h);
     // Dấu tâm neo nhỏ để tiện kiểm tra; nằm đúng tại vạch 0/mép trên.
-    ctx.fillStyle = hoverSnap ? '#ef4444' : '#0ea5e9';
-    ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.fill();
+    // V193: Dấu tâm neo của thước chuyển sang vàng nhạt, nhỏ hơn và trong suốt 50%.
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = hoverSnap ? '#ef4444' : '#FDE68A';
+    ctx.beginPath(); ctx.arc(0, 0, 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
     ctx.restore();
   }
 
@@ -4235,7 +4241,15 @@ body > .max-w-\[1300px\] {
     const pivotX = w * protractor.pivotRatioX; const pivotY = h * protractor.pivotRatioY;
     
     ctx.drawImage(protractor.img, -pivotX, -pivotY, w, h);
-    ctx.fillStyle = '#facc15'; ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.fill();
+    // V194: Điểm neo đặt đúng tâm hình học của thước đo góc (tâm cung tròn,
+    // giao điểm đường kính và trục 90°); màu vàng nhạt, độ trong suốt 70%.
+    ctx.save();
+    ctx.globalAlpha = 0.7;
+    ctx.fillStyle = '#FDE68A';
+    ctx.beginPath();
+    ctx.arc(0, 0, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
 
     // V67: Vùng phóng to/thu nhỏ được chuyển ra vòng cung ngoài, gần mép ngoài của vành chia độ.
     ctx.restore();
@@ -4919,7 +4933,7 @@ body > .max-w-\[1300px\] {
     });
   }
 
-  // PGP V192: Ảnh lấy từ clipboard thường có kích thước theo pixel màn hình
+  // PGP V195: Ảnh lấy từ clipboard thường có kích thước theo pixel màn hình
   // (physical pixels), trong khi tọa độ canvas dùng CSS/logical pixels.
   // Quy đổi theo DPR × boardZoom để tránh ảnh bị phóng lớn thêm lần nữa.
   // Nhờ vậy ảnh chụp cây thước đang hiển thị ở mức zoom 100% giữ đúng tỷ lệ cm
